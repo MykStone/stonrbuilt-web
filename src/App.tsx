@@ -72,6 +72,25 @@ function App() {
     return num.toLocaleString();
   }
 
+  // Calculate or parse 52-week range position (0.0 to 1.0)
+  function getRangePosition(row: string[]): number {
+    if (!row) return 0.5;
+    // Col N is index 13 (Range Position in Google Sheets)
+    if (row[13] !== undefined && row[13] !== "") {
+      const val = parseNumber(row[13]);
+      const ratio = val > 1 ? val / 100 : val;
+      if (!isNaN(ratio) && ratio >= 0) return Math.min(Math.max(ratio, 0), 1);
+    }
+    // Fallback: calculate from Price (Col C/index 2), Low (Col L/index 11), High (Col M/index 12)
+    const price = parseNumber(row[2]);
+    const low = parseNumber(row[11]);
+    const high = parseNumber(row[12]);
+    if (high > low && price >= low) {
+      return Math.min(Math.max((price - low) / (high - low), 0), 1);
+    }
+    return 0.5;
+  }
+
   const ENGINE_URL =
     "https://docs.google.com/spreadsheets/d/e/2PACX-1vRZQ9SrSDn-mxLZUQEgfQBXbsXvkNZKRJXVfvOlFrL_WZyStAPnRHf4B-J3VfIoqFbubD2mophz8_HI/pub?gid=0&single=true&output=csv";
 
@@ -117,6 +136,9 @@ function App() {
         vol: 0,
         divYears: 0,
         payout: 1,
+        low52: "N/A",
+        high52: "N/A",
+        rangePos: 0.5,
         dividendPass: false,
         payoutPass: false,
         marketCapPass: false,
@@ -132,6 +154,9 @@ function App() {
     const vol = parseNumber(row[4]);
     const divYears = parseNumber(row[5]);
     const payout = parsePayoutRatio(row[6]);
+    const low52 = row[11] || "N/A";
+    const high52 = row[12] || "N/A";
+    const rangePos = getRangePosition(row);
 
     const dividendPass = divYears >= 15;
     const payoutPass = payout <= 0.55 && payout > 0;
@@ -149,6 +174,9 @@ function App() {
       vol,
       divYears,
       payout,
+      low52,
+      high52,
+      rangePos,
       dividendPass,
       payoutPass,
       marketCapPass,
@@ -173,6 +201,14 @@ function App() {
   const marketCapCount = stockRows.filter((r) => checkRules(r).marketCapPass).length;
   const volumeCount = stockRows.filter((r) => checkRules(r).volumePass).length;
 
+  // Valuation Engine: Rank Cash Fortress stocks by proximity to 52-week low
+  const rankedValuationStocks = useMemo(() => {
+    const listToRank = fortressStocks.length > 0 ? fortressStocks : stockRows;
+    return [...listToRank].sort((a, b) => {
+      return getRangePosition(a) - getRangePosition(b);
+    });
+  }, [fortressStocks, stockRows]);
+
   // --- PORTFOLIO DATA PROCESSING ---
   const rawPortfolioRows = useMemo(() => {
     return portfolioData.slice(1).filter((r) => r[0] && r[0].trim().length > 0);
@@ -193,7 +229,7 @@ function App() {
     return holdings.reduce((sum, r) => sum + parseNumber(r[7]), 0);
   }, [holdings]);
 
-  const cashBalance = 3921.58;
+  const cashBalance = 4517.00;
   const q3Dividends = annualDividendIncome > 0 ? annualDividendIncome / 4 : 411.20;
   const trueTotalValue = totalStockValue + cashBalance + q3Dividends;
   const startingCapital = 100000.0;
@@ -302,7 +338,7 @@ function App() {
                   type="text"
                   value={ticker}
                   onChange={(e) => setTicker(e.target.value.toUpperCase())}
-                  placeholder="e.g. AAPL, JNJ, PG, HD"
+                  placeholder="e.g. AAPL, JNJ, PG, HD, WM, WMT"
                   maxLength={10}
                   className="w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-lg font-mono font-semibold text-white placeholder:text-slate-600 outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20 transition-all"
                 />
@@ -516,58 +552,107 @@ function App() {
             </div>
           )}
 
-          {/* 3. VALUATION ENGINE TAB */}
+          {/* 3. RESTORED 52-WEEK LOW VALUATION ENGINE TAB */}
           {page === "valuation" && (
             <div>
               <div className="border-b border-slate-800 pb-4 mb-5">
                 <div className="flex justify-between items-start">
                   <div>
                     <h2 className="text-lg font-bold text-white uppercase tracking-wider">
-                      Cash Fortress Portfolio
+                      Valuation Engine
                     </h2>
                     <p className="text-xs text-slate-400 mt-0.5">
-                      Elite dividend compounders meeting all 4 Cash Fortress rules.
+                      {fortressCount} Cash Fortress stocks ranked by proximity to their 52-Week Low.
                     </p>
                   </div>
                   <span className="text-xs bg-amber-500/10 text-amber-400 border border-amber-500/20 px-2.5 py-1 rounded-full font-semibold">
-                    {fortressCount} Stocks Qualified
+                    Buy the Dips
                   </span>
                 </div>
               </div>
 
+              {/* Legend */}
+              <div className="flex gap-4 text-xs mb-4 text-slate-400">
+                <span className="flex items-center gap-1.5">
+                  <span className="w-2.5 h-2.5 rounded-full bg-emerald-400" />
+                  On Sale (&le;30%)
+                </span>
+                <span className="flex items-center gap-1.5">
+                  <span className="w-2.5 h-2.5 rounded-full bg-amber-400" />
+                  Fair Value (31-65%)
+                </span>
+                <span className="flex items-center gap-1.5">
+                  <span className="w-2.5 h-2.5 rounded-full bg-slate-400" />
+                  Full Value (&gt;65%)
+                </span>
+              </div>
+
+              {/* Ranked Valuation List */}
               <div className="space-y-3 max-h-96 overflow-y-auto pr-1">
-                {fortressStocks.length === 0 ? (
+                {rankedValuationStocks.length === 0 ? (
                   <div className="text-center py-8 text-slate-500 text-sm">
-                    No qualifying Cash Fortress stocks found yet.
+                    Loading valuation data...
                   </div>
                 ) : (
-                  fortressStocks.map((stock) => {
-                    const info = checkRules(stock);
+                  rankedValuationStocks.map((stock) => {
+                    const range = getRangePosition(stock);
+                    const pct = Math.round(range * 100);
+
+                    let statusText = "Full Value";
+                    let badgeClass = "bg-slate-800 text-slate-300 border-slate-700";
+                    if (range <= 0.3) {
+                      statusText = "ON SALE";
+                      badgeClass = "bg-emerald-500/15 text-emerald-400 border-emerald-500/30";
+                    } else if (range <= 0.65) {
+                      statusText = "Fair Value";
+                      badgeClass = "bg-amber-500/15 text-amber-400 border-amber-500/30";
+                    }
+
                     return (
                       <div
                         key={stock[0]}
                         className="bg-slate-950/70 border border-slate-800/80 rounded-lg p-3 hover:border-slate-700 transition"
                       >
-                        <div className="flex justify-between items-center mb-1">
+                        <div className="flex justify-between items-center mb-2">
                           <div className="flex items-center gap-2">
                             <span className="font-mono font-bold text-base text-white">
-                              {info.ticker}
+                              {stock[0]}
                             </span>
                             <span className="text-xs text-slate-400 truncate max-w-[180px]">
-                              {info.companyName}
+                              {stock[1]}
                             </span>
                           </div>
 
-                          <span className="text-xs px-2 py-0.5 rounded font-bold border bg-emerald-500/15 text-emerald-400 border-emerald-500/30">
-                            QUALIFIED
-                          </span>
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs font-mono text-white">
+                              ${parseNumber(stock[2]).toFixed(2)}
+                            </span>
+                            <span
+                              className={`text-xs px-2 py-0.5 rounded font-bold border ${badgeClass}`}
+                            >
+                              {statusText} ({pct}%)
+                            </span>
+                          </div>
                         </div>
 
-                        <div className="grid grid-cols-4 gap-2 text-[11px] text-slate-400 pt-2 border-t border-slate-900 font-mono">
-                          <div>Price: <span className="text-white">{info.price}</span></div>
-                          <div>Div Yrs: <span className="text-amber-400">{info.divYears}y</span></div>
-                          <div>Payout: <span className="text-white">{(info.payout * 100).toFixed(0)}%</span></div>
-                          <div>Cap: <span className="text-white">{formatMarketCap(info.cap)}</span></div>
+                        {/* 52-Week Range Bar */}
+                        <div className="w-full bg-slate-800 rounded-full h-1.5 mb-1.5 overflow-hidden">
+                          <div
+                            className={`h-full rounded-full transition-all duration-300 ${
+                              range <= 0.3
+                                ? "bg-emerald-400"
+                                : range <= 0.65
+                                ? "bg-amber-400"
+                                : "bg-slate-400"
+                            }`}
+                            style={{ width: `${Math.min(Math.max(pct, 5), 100)}%` }}
+                          />
+                        </div>
+
+                        <div className="flex justify-between text-[11px] text-slate-500 font-mono">
+                          <span>52W Low: ${parseNumber(stock[11]).toFixed(2)}</span>
+                          <span>Div: {stock[5]}y streak</span>
+                          <span>52W High: ${parseNumber(stock[12]).toFixed(2)}</span>
                         </div>
                       </div>
                     );
@@ -598,7 +683,7 @@ function App() {
                   <div className="p-3 bg-slate-950/80 border border-slate-800 rounded-lg flex justify-between items-center">
                     <div>
                       <div className="text-white text-sm">1. Starting Universe</div>
-                      <div className="text-slate-400 font-normal">All screened dividend growth candidates (SCHD)</div>
+                      <div className="text-slate-400 font-normal">Screened dividend candidates (SCHD + Aristocrats)</div>
                     </div>
                     <span className="text-sm font-bold font-mono text-white">{universeCount}</span>
                   </div>
@@ -655,7 +740,7 @@ function App() {
 
               <div className="space-y-4 text-sm text-slate-300 leading-relaxed">
                 <p>
-                  I am 58 years old, and for the past 16 years, I have made my living driving a sanitation truck. It is honest, hard, physical work—and it teaches you very quickly that you do not have the time or luxury to gamble your hard-earned savings on Wall Street hype, crypto tokens, or confusing financial jargon.
+                  I am 58 years old, and for the past 16 years, I have made my living driving a sanitation truck. It is honest, hard, physical work—and it teaches you very quickly that you do not have the time or luxury to gamble your hard-earned retirement savings on Wall Street hype, crypto tokens, or confusing financial jargon.
                 </p>
 
                 <p>
@@ -679,7 +764,7 @@ function App() {
                     The $100k Live Paper Trading Experiment:
                   </span>
                   <p className="text-xs text-slate-300">
-                    To test this methodology with 100% transparency, I launched an equal-weight <strong>$100,000 paper trading benchmark on Webull on June 8, 2026</strong> across the 28 qualifying Cash Fortress companies. 
+                    To test this methodology with 100% transparency, I launched an equal-weight <strong>$100,000 paper trading benchmark on Webull on June 8, 2026</strong> across the 28 Cash Fortress companies. 
                   </p>
                   <p className="text-xs text-slate-300">
                     Standard brokers ignore dividend payments in paper accounts. StoneBuilt Capital tracks both capital appreciation <em>and</em> the actual dividend cash flow collected, proving real-world total return.
